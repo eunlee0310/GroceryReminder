@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "121391492067",
+    "project_id": "eungrocerymanagement",
+    "storage_bucket": "eungrocerymanagement.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:121391492067:android:7830566585c78fca420ed6",
+        "android_client_info": {
+          "package_name": "com.example.furfriend"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBRTe19pg_48ppBsroJo5fDCm1Y_5Z3VfA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:121391492067:android:1e0c12eb538162f2420ed6",
+        "android_client_info": {
+          "package_name": "my.edu.utar.grocerymanagement"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBRTe19pg_48ppBsroJo5fDCm1Y_5Z3VfA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

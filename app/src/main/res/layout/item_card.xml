@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="8dp"
+    android:foreground="?android:attr/selectableItemBackground"
+    android:elevation="4dp"
+    android:radius="16dp">
+
+    <LinearLayout
+        android:orientation="vertical"
+        android:background="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp">
+
+        <ImageView
+            android:id="@+id/productImage"
+            android:layout_width="match_parent"
+            android:layout_height="120dp"
+            android:scaleType="centerCrop"
+            android:src="@drawable/ic_grocery" />
+
+        <TextView
+            android:id="@+id/productName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Product"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:paddingTop="6dp" />
+
+        <TextView
+            android:id="@+id/productQty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Qty: 0"
+            android:textColor="#444444" />
+
+        <TextView
+            android:id="@+id/productExpireIn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Expires in: -"
+            android:textColor="#444444" />
+    </LinearLayout>
+</androidx.cardview.widget.CardView>
