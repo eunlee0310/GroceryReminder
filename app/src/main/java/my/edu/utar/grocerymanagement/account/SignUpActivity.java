@@ -49,22 +49,19 @@ public class SignUpActivity extends AppCompatActivity {
 
                 signUpBtn.setEnabled(valid);
                 signUpBtn.setBackgroundTintList(ContextCompat.getColorStateList(SignUpActivity.this, valid ? R.color.green : R.color.grey));
-
             }
 
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
-
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-            }
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) {}
         };
+
         username.addTextChangedListener(watcher);
         email.addTextChangedListener(watcher);
         password.addTextChangedListener(watcher);
 
         signUpBtn.setOnClickListener(v -> {
-            String user = username.getText().toString();
-            String mail = email.getText().toString();
+            String user = username.getText().toString().trim();
+            String mail = email.getText().toString().trim();
             String pass = password.getText().toString();
 
             checkUsernameExists(user, exists -> {
@@ -79,12 +76,19 @@ public class SignUpActivity extends AppCompatActivity {
                                     userMap.put("username", user);
                                     userMap.put("email", mail);
 
-                                    db.collection(FirestoreCollection.USERS).document(uid).collection(FirestoreCollection.PROFILE).document(FirestoreCollection.USER_DETAILS).set(userMap).addOnSuccessListener(unused -> {
-                                        Toast.makeText(this, "Account created.", Toast.LENGTH_SHORT).show();
-                                        Intent intent = new Intent(SignUpActivity.this, SignInActivity.class);
-                                        startActivity(intent);
-                                        finish();
-                                    });
+                                    // Save directly to users/uid (flattened)
+                                    db.collection(FirestoreCollection.USERS)
+                                            .document(uid)
+                                            .set(userMap)
+                                            .addOnSuccessListener(unused -> {
+                                                Toast.makeText(SignUpActivity.this, "Account created.", Toast.LENGTH_SHORT).show();
+                                                startActivity(new Intent(SignUpActivity.this, SignInActivity.class));
+                                                finish();
+                                            })
+                                            .addOnFailureListener(e -> {
+                                                Toast.makeText(SignUpActivity.this, "Failed to save user: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                                            });
+
                                 } else {
                                     Exception exception = task.getException();
                                     if (exception instanceof FirebaseAuthUserCollisionException) {
@@ -114,7 +118,6 @@ public class SignUpActivity extends AppCompatActivity {
     }
 
     private void checkUsernameExists(String username, OnUsernameCheckListener listener) {
-        FirebaseFirestore db = FirebaseFirestore.getInstance();
         db.collection(FirestoreCollection.USERS)
                 .whereEqualTo("username", username)
                 .get()

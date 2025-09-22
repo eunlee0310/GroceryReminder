@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <!-- Editable product name -->
+    <EditText
+        android:id="@+id/nameEdit"
+        android:hint="Product name"
+        android:inputType="textCapWords"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1" />
+
+    <!-- Category: spinner (same list as AddItemActivity) -->
+    <Spinner
+        android:id="@+id/categorySpinner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp" />
+
+    <!-- Only update shared catalog if checked -->
+    <CheckBox
+        android:id="@+id/updateCatalogCheck"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Also update catalog"
+        android:layout_marginTop="12dp"/>
+</LinearLayout>

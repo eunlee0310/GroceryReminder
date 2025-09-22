@@ -19,7 +19,7 @@
             android:layout_width="match_parent"
             android:layout_height="120dp"
             android:scaleType="centerCrop"
-            android:src="@drawable/ic_grocery" />
+            android:src="@drawable/fruits" />
 
         <TextView
             android:id="@+id/productName"
@@ -38,11 +38,21 @@
             android:text="Qty: 0"
             android:textColor="#444444" />
 
+        <!-- Primary line: e.g. "Expires in: 5 d" OR "Expired" OR "B1: Expired" -->
         <TextView
             android:id="@+id/productExpireIn"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Expires in: -"
             android:textColor="#444444" />
+
+        <!-- Secondary line: e.g. "B2: Expires in: 12 d" (shown only when needed) -->
+        <TextView
+            android:id="@+id/productExpireSecondary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="#444444"
+            android:visibility="gone" />
     </LinearLayout>
 </androidx.cardview.widget.CardView>

@@ -1,12 +1,17 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:padding="16dp" android:layout_width="match_parent" android:layout_height="match_parent">
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
-    <LinearLayout android:orientation="vertical"
-        android:layout_width="match_parent" android:layout_height="wrap_content">
+    <LinearLayout
+        android:id="@+id/detailRoot"
+        android:orientation="vertical"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="29dp"
+            android:layout_height="match_parent"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -18,33 +23,55 @@
                 android:contentDescription="Back"
                 android:src="@drawable/ic_back" />
 
-        </LinearLayout>
+            <View
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
 
+            <ImageButton
+                android:id="@+id/editBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@null"
+                android:src="@drawable/ic_edit" />
+            <View
+                android:layout_width="10dp"
+                android:layout_height="0dp" />
+            <ImageButton
+                android:id="@+id/deleteBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:background="@null"
+                android:src="@drawable/ic_delete" />
+        </LinearLayout>
 
         <ImageView
             android:id="@+id/imagePreview"
             android:layout_width="match_parent"
-            android:layout_height="300dp"
+            android:layout_height="160dp"
             android:layout_marginTop="8dp"
             android:scaleType="fitCenter" />
 
-        <TextView android:id="@+id/nameText"
+        <TextView
+            android:id="@+id/nameText"
             android:textStyle="bold"
             android:textSize="20sp"
             android:layout_marginTop="12dp"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"/>
+            android:layout_height="wrap_content" />
 
-        <TextView android:id="@+id/categoryText"
+        <TextView
+            android:id="@+id/categoryText"
             android:textSize="16sp"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"/>
+            android:layout_height="wrap_content" />
 
-        <TextView android:text="Batches:"
+        <TextView
+            android:text="Batches:"
             android:textStyle="bold"
             android:layout_marginTop="16dp"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"/>
+            android:layout_height="wrap_content" />
 
         <LinearLayout
             android:id="@+id/batchListLayout"
@@ -53,7 +80,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp" />
 
-        <TextView android:text="Notes:"
+        <TextView
+            android:text="Notes:"
             android:textStyle="bold"
             android:layout_marginTop="16dp"
             android:layout_width="match_parent"
@@ -62,9 +90,9 @@
         <TextView
             android:id="@+id/notesText"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="8dp"
-            android:minLines="2" />
+            android:layout_height="40dp"
+            android:minLines="2"
+            android:padding="8dp" />
 
         <LinearLayout
             android:orientation="horizontal"
@@ -83,58 +111,33 @@
 
             <ImageButton
                 android:id="@+id/decreaseBtn"
-                android:layout_width="30dp"
-                android:layout_height="30dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:layout_marginStart="16dp"
                 android:background="@null"
                 android:src="@drawable/ic_minus" />
-
-
         </LinearLayout>
 
+        <FrameLayout
+            android:id="@+id/chartHost"
+            android:layout_width="match_parent"
+            android:layout_height="134dp"
+            android:layout_marginTop="12dp" />
 
         <TextView
-            android:id="@+id/actualRateText"
-            android:layout_width="wrap_content"
+            android:id="@+id/rateHintText"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Actual Rate: "
-            android:textSize="16sp" />
+            android:layout_marginTop="8dp"
+            android:textColor="#555555"
+            android:textSize="14sp"
+            android:text="—" />
 
         <TextView
             android:id="@+id/lastUsedText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Last Used: N/A"/>
-
-        <TextView
-            android:id="@+id/baseRateText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Base Rate: "
-            android:textSize="16sp" />
-
-        <TextView
-            android:id="@+id/estimatedRateText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Estimated Rate: "
-            android:textSize="16sp" />
-
-        <Button
-            android:id="@+id/editBtn"
-            android:text="Edit"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"/>
-
-        <Button
-            android:id="@+id/deleteBtn"
-            android:text="Delete"
-            android:backgroundTint="@android:color/holo_red_light"
-            android:textColor="@android:color/white"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"/>
+            android:text="Last Used: N/A" />
 
     </LinearLayout>
 </ScrollView>
