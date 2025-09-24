@@ -23,11 +23,11 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
+import com.google.firebase.firestore.Source;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -40,7 +40,7 @@ public class NotificationService extends BroadcastReceiver {
     // ===== Channel & IDs =====
     private static final String CHANNEL_ID = "grocery_notifications";
     private static final String NOTIFICATION_GROUP = "grocery_notifications_group";
-    private static final String TYPE_GROUP = "group"; // single alarm for snooze retries
+    private static final String TYPE_GROUP = "group";
     private static final int SUMMARY_NOTIFICATION_ID = 9999;
 
     // ===== Timing rules =====
@@ -91,7 +91,6 @@ public class NotificationService extends BroadcastReceiver {
                 if ("daily_kick".equals(reqType)) {
                     scheduleMorningCheck(context);
                 }
-                // keep watchdog alive
                 scheduleWatchdog(context);
                 break;
             }
@@ -156,9 +155,7 @@ public class NotificationService extends BroadcastReceiver {
         SharedPreferences userPrefs = context.getSharedPreferences("UserPrefs", Context.MODE_PRIVATE);
         int userLimit = userPrefs.getInt("maxNotificationsPerDay", 3);
 
-        // ---- GUARDS ----
         if (!force) {
-
             // If this is an AUTO check while we're snoozed:
             if (!fromSnooze && snoozed) {
                 if (nextAt > 0 && now >= nextAt) {
@@ -224,7 +221,8 @@ public class NotificationService extends BroadcastReceiver {
         }
 
         FirebaseFirestore db = FirebaseFirestore.getInstance();
-        db.collection("users").document(uid).collection("grocery_items").get()
+        db.collection("users").document(uid).collection("grocery_items")
+                .get(Source.SERVER) // ⬅️ force fresh snapshot to avoid stale lastUsed
                 .addOnCompleteListener(task -> {
                     try {
                         if (task.isSuccessful()) {
@@ -288,6 +286,7 @@ public class NotificationService extends BroadcastReceiver {
         // Skip if nearest expiry > 90 days
         Object batchesObj = document.get("batches");
         if (batchesObj instanceof List) {
+            @SuppressWarnings("unchecked")
             List<Map<String, Object>> batches = (List<Map<String, Object>>) batchesObj;
             for (Map<String, Object> batch : batches) {
                 String expiryDateString = (String) batch.get("expiryDate");
@@ -351,27 +350,61 @@ public class NotificationService extends BroadcastReceiver {
         int totalQty = 0;
         Object batchesObj = document.get("batches");
         if (batchesObj instanceof List) {
+            @SuppressWarnings("unchecked")
             List<Map<String, Object>> batches = (List<Map<String, Object>>) batchesObj;
+
+            boolean hasUnexpiredBatch = false;
+            final SimpleDateFormat ymd = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
+            long todayMidnight = atLocalMidnight(System.currentTimeMillis());
+
             for (Map<String, Object> batch : batches) {
                 Object qObj = batch.get("quantity");
-                if (qObj instanceof Number) totalQty += ((Number) qObj).intValue();
-            }
-        }
-        if (totalQty <= 0) return;
+                int qty = (qObj instanceof Number) ? ((Number) qObj).intValue() : 0;
+                if (qty <= 0) continue;
+                totalQty += qty;
 
-        Date lastUsedTime = document.getDate("lastUsed"); // Firestore Timestamp preferred
+                String expStr = (String) batch.get("expiryDate");
+                if (TextUtils.isEmpty(expStr)) {
+                    hasUnexpiredBatch = true;
+                    continue;
+                }
+                Date expDate = null;
+                try { expDate = ymd.parse(expStr); } catch (Exception ignored) {}
+                if (expDate == null) {
+                    hasUnexpiredBatch = true;
+                    continue;
+                }
+                long expMidnight = atLocalMidnight(expDate.getTime());
+                if (expMidnight > todayMidnight) {
+                    hasUnexpiredBatch = true;
+                }
+            }
+
+            // If nothing in stock or ALL batches expired → do NOT include in forgotten
+            if (totalQty <= 0) return;
+            if (!hasUnexpiredBatch) {
+                Log.d(TAG, productName + ": All batches expired → skip forgotten");
+                return;
+            }
+        } else {
+            // No batches info → nothing to do
+            return;
+        }
+
+        Date lastUsedTime = document.getDate("lastUsed"); // Firestore Timestamp/Date
         if (lastUsedTime == null) return;
 
-        // ⭐ Normalize BOTH dates to local midnight (date-only math)
-        long todayMidnight = atLocalMidnight(System.currentTimeMillis());
+        long todayMidnight    = atLocalMidnight(System.currentTimeMillis());
         long lastUsedMidnight = atLocalMidnight(lastUsedTime.getTime());
+        long daysUnused       = TimeUnit.MILLISECONDS.toDays(todayMidnight - lastUsedMidnight);
 
-        long daysUnused = TimeUnit.MILLISECONDS.toDays(todayMidnight - lastUsedMidnight);
+        boolean showThisDay = (daysUnused >= 15) && (daysUnused % 15 == 0);
+        if (!showThisDay) {
+            Log.d(TAG, productName + ": Forgotten → NOT included (daysUnused=" + daysUnused + ")");
+            return;
+        }
 
-        // ⭐ Throttle store (date-only, sticky for the day)
         SharedPreferences lastNotifPrefs = context.getSharedPreferences("forgotten_notification_dates", Context.MODE_PRIVATE);
-
-        // Back-compat migration: older key without "_day"
         long lastNotifDay = lastNotifPrefs.getLong(productId + "_day", 0L);
         if (lastNotifDay == 0L) {
             long legacy = lastNotifPrefs.getLong(productId, 0L);
@@ -382,22 +415,13 @@ public class NotificationService extends BroadcastReceiver {
         }
 
         boolean notifiedToday = (lastNotifDay == todayMidnight);
-        boolean eligibleByAge = (daysUnused >= 15);
-        boolean eligibleByThrottle = (lastNotifDay == 0L) ||
-                (TimeUnit.MILLISECONDS.toDays(todayMidnight - lastNotifDay) >= 15);
 
-        // ⭐ Include in list if:
-        //    - 15+ days unused AND (first time in >=15 days OR already notified today to keep sticky)
-        if (eligibleByAge && (eligibleByThrottle || notifiedToday)) {
-            forgottenItems.add(productName);
+        forgottenItems.add(productName);
+        Log.d(TAG, productName + ": Forgotten → INCLUDED (daysUnused=" + daysUnused + ", modulo=0)");
 
-            // ⭐ Only stamp "today" the FIRST time we truly notify today (not on UI-only refreshes)
-            if (recordThrottle && !notifiedToday && eligibleByThrottle) {
-                lastNotifPrefs.edit().putLong(productId + "_day", todayMidnight).apply();
-                Log.d(TAG, productName + ": Forgotten → first notify today (stamp day).");
-            } else {
-                Log.d(TAG, productName + ": Forgotten → included (sticky or UI-only).");
-            }
+        if (recordThrottle && !notifiedToday) {
+            lastNotifPrefs.edit().putLong(productId + "_day", todayMidnight).apply();
+            Log.d(TAG, productName + ": Forgotten → first trigger today (stamp day).");
         }
     }
 
@@ -421,12 +445,24 @@ public class NotificationService extends BroadcastReceiver {
         boolean hasLow       = !lowConsumptionItems.isEmpty();
         boolean hasForgotten = !forgottenItems.isEmpty();
 
-        // Persist lists for NotificationCenter (even if no notify)
+        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+
+        // ⬇️ Clear stale lists if date rolled over
         SharedPreferences itemsPrefs = context.getSharedPreferences("attention_items", Context.MODE_PRIVATE);
+        String lastDay = itemsPrefs.getString("attention_items_date", "");
+        if (!today.equals(lastDay)) {
+            itemsPrefs.edit()
+                    .remove("expired")
+                    .remove("low")
+                    .remove("forgotten")
+                    .apply();
+        }
+
         itemsPrefs.edit()
                 .putString("expired",   TextUtils.join(",", expiredItems))
                 .putString("low",       TextUtils.join(",", lowConsumptionItems))
                 .putString("forgotten", TextUtils.join(",", forgottenItems))
+                .putString("attention_items_date", today)
                 .apply();
 
         if (uiOnly) {
@@ -435,9 +471,6 @@ public class NotificationService extends BroadcastReceiver {
         }
         if (!hasExpired && !hasLow && !hasForgotten) return;
 
-        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
-
-        // Guards
         SharedPreferences seenPrefs = context.getSharedPreferences(PREF_SEEN, Context.MODE_PRIVATE);
         if (!fromSnooze && today.equals(seenPrefs.getString("last_seen_date", ""))) {
             Log.d(TAG, "Seen guard (auto) → skip");
@@ -479,7 +512,7 @@ public class NotificationService extends BroadcastReceiver {
 
         if (shown) {
             if (fromSnooze && !watchdogAuto) {
-                Log.i(TAG, "✅ Snooze notification sent");
+                Log.i(TAG, "Snooze notification sent");
 
                 int delivered = snoozePrefs.getInt("snooze_retry_count", -1);
                 int newDelivered = (delivered < 0) ? 0 : Math.min(delivered + 1, MAX_SNOOZE_RETRIES);
@@ -500,7 +533,6 @@ public class NotificationService extends BroadcastReceiver {
                 }
 
             } else {
-                // AUTO path (normal or watchdogAuto)
                 notifyPrefs.edit()
                         .putString(PREF_LAST_NOTIFY_DATE, today)
                         .putLong("last_notify_time", now)
@@ -509,7 +541,6 @@ public class NotificationService extends BroadcastReceiver {
                 todayCount++;
                 countPrefs.edit().putInt(today, todayCount).apply();
 
-                // leaving snooze state if any
                 snoozePrefs.edit()
                         .putBoolean("is_snoozed", false)
                         .putString("snooze_date", "")
@@ -517,12 +548,11 @@ public class NotificationService extends BroadcastReceiver {
                         .putInt("snooze_retry_count", -1)
                         .apply();
 
-                Log.i(TAG, (watchdogAuto ? "✅ Watchdog(auto) sent" : "✅ Auto notification sent")
+                Log.i(TAG, (watchdogAuto ? "Watchdog(auto) sent" : "Auto notification sent")
                         + " (" + todayCount + " times today)");
             }
         }
 
-        // Continue cadence:
         if (!fromSnooze) {
             if (hasExpired)   scheduleSnoozeForType(context, "expired", false);
             if (hasLow)       scheduleSnoozeForType(context, "low_consumption", false);
@@ -555,7 +585,7 @@ public class NotificationService extends BroadcastReceiver {
             content = prefix + ": " + content;
         }
 
-        // Build BigText without trailing blank lines and only insert separators between sections
+        // Build BigText
         StringBuilder big = new StringBuilder();
         StringBuilder typesCSV = new StringBuilder();
         int sections = 0;
@@ -567,7 +597,7 @@ public class NotificationService extends BroadcastReceiver {
             typesCSV.append("expired");
         }
         if (hasLow) {
-            if (sections > 0) big.append("\n"); // separator between sections
+            if (sections > 0) big.append("\n");
             sections++;
             big.append("📉 Low Consumption Items:\n");
             for (String item : lowConsumptionItems) big.append("• ").append(item).append("\n");
@@ -583,7 +613,6 @@ public class NotificationService extends BroadcastReceiver {
             typesCSV.append("forgotten");
         }
 
-        // Trim to remove the final newline so there’s no empty line at the bottom
         String bigTextStr = big.toString().trim();
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
@@ -595,7 +624,6 @@ public class NotificationService extends BroadcastReceiver {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER);
 
-        // Only use the summary layout if we truly have multiple sections to summarize
         if (sections >= 2) {
             builder.setGroup(NOTIFICATION_GROUP).setGroupSummary(true);
         }
@@ -667,14 +695,14 @@ public class NotificationService extends BroadcastReceiver {
                         .putLong("snooze_next_at", when)
                         .apply();
 
-                Log.i(TAG, "⏰ Snooze-retry scheduled (next will be retry " + (retry + 1) + "/" + MAX_SNOOZE_RETRIES + ")");
+                Log.i(TAG, "Snooze-retry scheduled (next will be retry " + (retry + 1) + "/" + MAX_SNOOZE_RETRIES + ")");
             } else {
                 snoozePrefs.edit()
                         .putInt("snooze_retry_count", MAX_SNOOZE_RETRIES)
                         .putLong("snooze_next_at", 0L)
                         .apply();
 
-                Log.i(TAG, "🛑 Snooze retries exhausted for type=" + type);
+                Log.i(TAG, "Snooze retries exhausted for type=" + type);
             }
         } else {
             long when = System.currentTimeMillis() + AUTO_RESEND_INTERVAL;
@@ -684,7 +712,7 @@ public class NotificationService extends BroadcastReceiver {
                     .putLong("snooze_next_at", when)
                     .apply();
 
-            Log.i(TAG, "⏰ Auto-resend scheduled for type=" + type + " at " + new Date(when));
+            Log.i(TAG, "Auto-resend scheduled for type=" + type + " at " + new Date(when));
         }
     }
 
@@ -711,7 +739,6 @@ public class NotificationService extends BroadcastReceiver {
                 am.setExact(AlarmManager.RTC_WAKEUP, at, pi);
             }
         } else {
-            // fallback → most accurate but shows the alarm icon
             Intent show = new Intent(ctx, MainActivity.class)
                     .setAction(fromSnooze ? "SHOW_SNOOZE_ALARM" : "SHOW_ALARM")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -744,7 +771,7 @@ public class NotificationService extends BroadcastReceiver {
                 if (pi != null) {
                     am.cancel(pi);
                     pi.cancel();
-                    Log.d(TAG, "🔕 Canceled alarm for type=" + t + ", path=" + (fromSnooze ? "retry" : "auto"));
+                    Log.d(TAG, "Canceled alarm for type=" + t + ", path=" + (fromSnooze ? "retry" : "auto"));
                 }
             }
         }
@@ -759,7 +786,7 @@ public class NotificationService extends BroadcastReceiver {
         if (gpi != null) {
             am.cancel(gpi);
             gpi.cancel();
-            Log.d(TAG, "🔕 Canceled alarm for snooze group");
+            Log.d(TAG, "Canceled alarm for snooze group");
         }
     }
 
@@ -774,7 +801,7 @@ public class NotificationService extends BroadcastReceiver {
         SharedPreferences retryPrefs = context.getSharedPreferences(PREF_SNOOZE_RETRIES, Context.MODE_PRIVATE);
         retryPrefs.edit().putInt("group", 0).apply();
 
-        Log.i(TAG, "👀 User pressed Seen → cleared all retries");
+        Log.i(TAG, "User pressed Seen → cleared all retries");
     }
 
     private void handleSpecificSnooze(Context context, String type, long snoozeMillis) {
@@ -786,7 +813,7 @@ public class NotificationService extends BroadcastReceiver {
         cal.setTimeInMillis(triggerTime);
         int hourOfDay = cal.get(Calendar.HOUR_OF_DAY);
         if (hourOfDay < 7 || hourOfDay >= 21) {
-            Log.w(TAG, "❌ Snooze target " + new Date(triggerTime) + " is outside 7:00–21:00. Skipping.");
+            Log.w(TAG, "Snooze target " + new Date(triggerTime) + " is outside 7:00–21:00. Skipping.");
             Toast.makeText(context, "Snooze must end between 7 AM and 9 PM", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -838,14 +865,10 @@ public class NotificationService extends BroadcastReceiver {
         }
 
         scheduleAlarm(context, "daily_kick", cal.getTimeInMillis(), false);
-        Log.i(TAG, "⏰ Scheduled morning check at " + new Date(cal.getTimeInMillis()));
+        Log.i(TAG, "Scheduled morning check at " + new Date(cal.getTimeInMillis()));
 
         scheduleWatchdog(context);
     }
-
-    // =========================
-    // ===== Watchdog bits =====
-    // =========================
 
     public static void scheduleWatchdog(Context context) {
         long when = System.currentTimeMillis() + WATCHDOG_INTERVAL;
@@ -886,7 +909,7 @@ public class NotificationService extends BroadcastReceiver {
                 am.set(AlarmManager.RTC_WAKEUP, when, pi);
             }
         }
-        Log.d(TAG, "🕒 Watchdog scheduled for " + new Date(when));
+        Log.d(TAG, "Watchdog scheduled for " + new Date(when));
     }
 
     private void runWatchdog(Context context, PendingResult pending) {
