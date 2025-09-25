@@ -805,7 +805,10 @@ public class NotificationService extends BroadcastReceiver {
     }
 
     private void handleSpecificSnooze(Context context, String type, long snoozeMillis) {
-        if (snoozeMillis <= 0) snoozeMillis = 5 * 60 * 1000;
+        if (snoozeMillis <= 0) {
+            Log.w(TAG, "handleSpecificSnooze: invalid duration (<=0). Ignoring.");
+            return;
+        }
 
         long triggerTime = System.currentTimeMillis() + snoozeMillis;
 
@@ -813,11 +816,9 @@ public class NotificationService extends BroadcastReceiver {
         cal.setTimeInMillis(triggerTime);
         int hourOfDay = cal.get(Calendar.HOUR_OF_DAY);
         if (hourOfDay < 7 || hourOfDay >= 21) {
-            Log.w(TAG, "Snooze target " + new Date(triggerTime) + " is outside 7:00–21:00. Skipping.");
-            Toast.makeText(context, "Snooze must end between 7 AM and 9 PM", Toast.LENGTH_SHORT).show();
+            Log.w(TAG, "handleSpecificSnooze: end time outside 7–21. Ignoring. target=" + new Date(triggerTime));
             return;
         }
-
         cancelResendAndSnooze(context);
 
         SharedPreferences retryPrefs = context.getSharedPreferences(PREF_SNOOZE_RETRIES, Context.MODE_PRIVATE);
@@ -837,7 +838,7 @@ public class NotificationService extends BroadcastReceiver {
                 .apply();
 
         scheduleAlarm(context, TYPE_GROUP, triggerTime, true);
-        Log.i(TAG, "⏸ New snooze set → next at " + new Date(triggerTime));
+        Log.i(TAG, "Snooze set → next at " + new Date(triggerTime));
     }
 
     private void createNotificationChannel(Context context) {
