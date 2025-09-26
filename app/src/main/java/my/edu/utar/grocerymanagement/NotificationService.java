@@ -283,60 +283,73 @@ public class NotificationService extends BroadcastReceiver {
         String productId = document.getId();
         String productName = document.getString("name");
 
-        // Skip if nearest expiry > 90 days
+        // ===== Nearest expiry check =====
         Object batchesObj = document.get("batches");
         if (batchesObj instanceof List) {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> batches = (List<Map<String, Object>>) batchesObj;
+            long nearestExpiryDays = Long.MAX_VALUE;
+
             for (Map<String, Object> batch : batches) {
-                String expiryDateString = (String) batch.get("expiryDate");
-                if (expiryDateString == null) continue;
+                String expStr = (String) batch.get("expiryDate");
+                if (expStr == null) continue;
+
                 try {
-                    Date expiryDate = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(expiryDateString);
-                    if (expiryDate == null) continue;
-                    long daysToExpiry = (expiryDate.getTime() - currentTime) / (1000 * 60 * 60 * 24);
-                    if (daysToExpiry > 90) {
-                        Log.d(TAG, productName + ": Skipped low consumption (expiry > 90 days)");
-                        return;
-                    }
+                    Date expDate = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(expStr);
+                    if (expDate == null) continue;
+
+                    long daysToExpiry = TimeUnit.MILLISECONDS.toDays(expDate.getTime() - currentTime);
+                    nearestExpiryDays = Math.min(nearestExpiryDays, daysToExpiry);
                 } catch (Exception ignored) {}
+            }
+
+            if (nearestExpiryDays >= 90) {
+                Log.d(TAG, productName + ": Skipped low consumption (expiry >= 90 days)");
+                return;
             }
         }
 
-        Double acrDouble = document.getDouble("ACR");
-        Double ecrDouble = document.getDouble("ECR");
-        double ACR = acrDouble != null ? acrDouble : 0f;
-        double ECR = ecrDouble != null ? ecrDouble : 0f;
+        // ===== Rates =====
+        double ACR = document.getDouble("ACR") != null ? document.getDouble("ACR") : 0f;
+        double ECR = document.getDouble("ECR") != null ? document.getDouble("ECR") : 0f;
 
+        // ===== Daily counter storage =====
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
         SharedPreferences prefs = context.getSharedPreferences(PREF_CONSECUTIVE_DAYS, Context.MODE_PRIVATE);
         SharedPreferences dayPrefs = context.getSharedPreferences(PREF_LAST_CHECK_DATE, Context.MODE_PRIVATE);
 
-        String lastCheckDate = dayPrefs.getString("last_check_" + productId, "");
         int consecutiveDays = prefs.getInt("low_" + productId, 0);
+        String lastCheckDate = dayPrefs.getString("last_check_" + productId, "");
 
+        // Only increment/reset counter once per new day
         if (!today.equals(lastCheckDate)) {
             dayPrefs.edit().putString("last_check_" + productId, today).apply();
 
             if (ACR < ECR) {
                 consecutiveDays++;
-                prefs.edit().putInt("low_" + productId, consecutiveDays).apply();
-                Log.d(TAG, productName + ": Incremented to " + consecutiveDays + " days");
+                Log.d(TAG, productName + ": ACR<ECR → counter now " + consecutiveDays);
             } else {
-                prefs.edit().putInt("low_" + productId, 0).apply();
-                Log.d(TAG, productName + ": Reset counter to 0 (ACR ≥ ECR)");
+                consecutiveDays = 0; // reset if caught up
+                Log.d(TAG, productName + ": ACR≥ECR → reset counter to 0");
             }
 
-            if (consecutiveDays == 3) {
-                prefs.edit().putInt("low_" + productId, 0).apply();
-                Log.d(TAG, productName + ": Reset counter after 3 days");
-                return;
-            }
+            prefs.edit().putInt("low_" + productId, consecutiveDays).apply();
         }
 
-        if (consecutiveDays == 2) {
+        // ===== Decide if we should add to LOW list today =====
+        boolean belowPaceNow = ACR < ECR;
+
+        if (consecutiveDays == 2 && belowPaceNow) {
             lowConsumptionItems.add(productName);
-            Log.d(TAG, productName + ": Ready for notification (2 consecutive days)");
+            Log.d(TAG, productName + ": Added to LOW list (2 consecutive days AND still below pace)");
+        } else {
+            Log.d(TAG, productName + ": Not added to LOW (streak=" + consecutiveDays + ", belowPaceNow=" + belowPaceNow + ")");
+        }
+
+        // Auto reset after 3 days to avoid infinite streak
+        if (consecutiveDays >= 3) {
+            prefs.edit().putInt("low_" + productId, 0).apply();
+            Log.d(TAG, productName + ": Counter auto-reset at 3 days");
         }
     }
 
@@ -458,6 +471,7 @@ public class NotificationService extends BroadcastReceiver {
                     .apply();
         }
 
+        // Always update stored lists for Notification Center
         itemsPrefs.edit()
                 .putString("expired",   TextUtils.join(",", expiredItems))
                 .putString("low",       TextUtils.join(",", lowConsumptionItems))
@@ -465,10 +479,18 @@ public class NotificationService extends BroadcastReceiver {
                 .putString("attention_items_date", today)
                 .apply();
 
+        // ✅ uiOnly path → refresh lists but NEVER show a push
         if (uiOnly) {
-            Log.i(TAG, "UI-only refresh → lists updated without posting a notification");
+            if (!hasExpired && !hasLow && !hasForgotten) {
+                NotificationManagerCompat.from(context).cancel(SUMMARY_NOTIFICATION_ID);
+            } else {
+                // cancel any old push so only Notification Center shows the list
+                NotificationManagerCompat.from(context).cancel(SUMMARY_NOTIFICATION_ID);
+            }
             return;
         }
+
+        // If nothing left to notify, stop
         if (!hasExpired && !hasLow && !hasForgotten) return;
 
         SharedPreferences seenPrefs = context.getSharedPreferences(PREF_SEEN, Context.MODE_PRIVATE);
@@ -560,6 +582,7 @@ public class NotificationService extends BroadcastReceiver {
         }
     }
 
+
     @SuppressLint("MissingPermission")
     private boolean createGroupedNotification(Context context,
                                               boolean hasExpired,
@@ -620,7 +643,7 @@ public class NotificationService extends BroadcastReceiver {
                 .setContentTitle(title)
                 .setContentText(content)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(bigTextStr))
-                .setAutoCancel(true)
+                .setAutoCancel(false)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER);
 
@@ -691,6 +714,7 @@ public class NotificationService extends BroadcastReceiver {
 
                 prefs.edit().putInt(type, retry + 1).apply();
 
+                // keep these ONLY for real snooze
                 snoozePrefs.edit()
                         .putLong("snooze_next_at", when)
                         .apply();
@@ -707,40 +731,51 @@ public class NotificationService extends BroadcastReceiver {
         } else {
             long when = System.currentTimeMillis() + AUTO_RESEND_INTERVAL;
             scheduleAlarm(context, type, when, false);
-
-            snoozePrefs.edit()
-                    .putLong("snooze_next_at", when)
-                    .apply();
-
             Log.i(TAG, "Auto-resend scheduled for type=" + type + " at " + new Date(when));
         }
     }
 
+
     public static void scheduleAlarm(Context ctx, String type, long at, boolean fromSnooze) {
         Intent i = new Intent(ctx, NotificationService.class)
                 .setAction(fromSnooze ? ACTION_CHECK_RETRY : ACTION_CHECK)
-                .putExtra("type", type).putExtra("fromSnooze", fromSnooze);
+                .putExtra("type", type)
+                .putExtra("fromSnooze", fromSnooze);
+
         int req = (type + "_" + (fromSnooze ? "retry" : "auto")).hashCode();
-        PendingIntent pi = PendingIntent.getBroadcast(ctx, req, i,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent pi = PendingIntent.getBroadcast(
+                ctx, req, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
         if (am == null) return;
 
-        boolean canExact = true;
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            canExact = am.canScheduleExactAlarms();
+        if (fromSnooze) {
+            // Exact, doze-proof, user-visible alarm → your BroadcastReceiver will fire on time
+            Intent show = new Intent(ctx, MainActivity.class)
+                    .setAction("SHOW_SNOOZE_ALARM")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent showPi = PendingIntent.getActivity(
+                    ctx, (type + "_show").hashCode(), show,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            am.setAlarmClock(new AlarmManager.AlarmClockInfo(at, showPi), pi);
+            return;
         }
 
+        // Auto-resend path (no alarm icon)
+        boolean canExact = true;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            canExact = am.canScheduleExactAlarms();
+        }
         if (canExact) {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
             } else {
                 am.setExact(AlarmManager.RTC_WAKEUP, at, pi);
             }
         } else {
             Intent show = new Intent(ctx, MainActivity.class)
-                    .setAction(fromSnooze ? "SHOW_SNOOZE_ALARM" : "SHOW_ALARM")
+                    .setAction("SHOW_ALARM")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent showPi = PendingIntent.getActivity(
                     ctx, (type + "_show").hashCode(), show,

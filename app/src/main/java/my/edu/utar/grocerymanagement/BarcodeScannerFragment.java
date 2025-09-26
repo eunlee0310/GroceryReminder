@@ -351,6 +351,7 @@ public class BarcodeScannerFragment extends Fragment {
                                         // No catalog entry → go add with just barcode
                                         Intent i = new Intent(requireContext(), AddItemActivity.class);
                                         i.putExtra("prefillBarcode", barcode);
+                                        i.putExtra("allowCatalogUpdate", true);
                                         addItemLauncher.launch(i);
                                     }
                                 })
