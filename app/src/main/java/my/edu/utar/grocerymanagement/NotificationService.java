@@ -13,7 +13,6 @@ import android.os.Build;
 import android.os.PowerManager;
 import android.text.TextUtils;
 import android.util.Log;
-import android.widget.Toast;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
@@ -84,7 +83,6 @@ public class NotificationService extends BroadcastReceiver {
                 boolean force       = intent.getBooleanExtra("force", false);
                 boolean uiOnly      = intent.getBooleanExtra("uiOnly", false);
 
-                // regular flows → watchdogAuto=false
                 checkNotificationConditions(context, fromSnooze, snoozeType, force, uiOnly, /*watchdogAuto*/ false, pending);
 
                 String reqType = intent.getStringExtra("type");
@@ -156,14 +154,11 @@ public class NotificationService extends BroadcastReceiver {
         int userLimit = userPrefs.getInt("maxNotificationsPerDay", 3);
 
         if (!force) {
-            // If this is an AUTO check while we're snoozed:
             if (!fromSnooze && snoozed) {
                 if (nextAt > 0 && now >= nextAt) {
-                    // Snooze time has passed -> promote this AUTO run to a SNOOZE delivery now.
-                    fromSnooze = true;
+                    fromSnooze = true; // promote
                     Log.d(TAG, "⏩ Auto run after snooze end → promoted to snooze delivery (now)");
                 } else {
-                    // Still inside the snooze window → just skip; the existing snooze alarm will fire.
                     Log.d(TAG, "⏸ Snooze guard active (auto path) → skip until " + new Date(nextAt));
                     pending.finish();
                     return;
@@ -171,7 +166,6 @@ public class NotificationService extends BroadcastReceiver {
             }
 
             if (fromSnooze) {
-                // Snooze path only respects the daytime window
                 if (hour < 7 || hour >= 21) {
                     long retryWhen = now + TimeUnit.MINUTES.toMillis(5);
                     scheduleAlarm(context, snoozeType != null ? snoozeType : "expired", retryWhen, true);
@@ -188,16 +182,16 @@ public class NotificationService extends BroadcastReceiver {
                     pending.finish();
                     return;
                 }
-                // daily-limit guard (bypass when watchdogAuto)
-                if (!watchdogAuto && todayCount >= userLimit) {
-                    Log.d(TAG, "Max notifications reached today (" + userLimit + ")");
+                // ✅ Apply cap to ALL auto sends (normal + watchdog-triggered)
+                if (todayCount >= userLimit) {
+                    Log.d(TAG, "Daily cap reached (" + userLimit + ") → skip and cancel any pending autos");
+                    cancelResendAndSnooze(context);
                     pending.finish();
                     return;
                 }
             }
         }
 
-        // Continue into Firestore async; finish() will be called in callback
         checkGroceryItems(context, fromSnooze, snoozeType, uiOnly, watchdogAuto, pending);
     }
 
@@ -222,7 +216,7 @@ public class NotificationService extends BroadcastReceiver {
 
         FirebaseFirestore db = FirebaseFirestore.getInstance();
         db.collection("users").document(uid).collection("grocery_items")
-                .get(Source.SERVER) // ⬅️ force fresh snapshot to avoid stale lastUsed
+                .get(Source.SERVER)
                 .addOnCompleteListener(task -> {
                     try {
                         if (task.isSuccessful()) {
@@ -272,9 +266,9 @@ public class NotificationService extends BroadcastReceiver {
 
             long expMidnight = atLocalMidnight(expDate.getTime());
             if (expMidnight <= todayMidnight) {
-                expiredItems.add(productName);   // ← only the name
+                expiredItems.add(productName);
                 Log.d(TAG, productName + " expired");
-                break; // add once per product
+                break;
             }
         }
     }
@@ -321,7 +315,6 @@ public class NotificationService extends BroadcastReceiver {
         int consecutiveDays = prefs.getInt("low_" + productId, 0);
         String lastCheckDate = dayPrefs.getString("last_check_" + productId, "");
 
-        // Only increment/reset counter once per new day
         if (!today.equals(lastCheckDate)) {
             dayPrefs.edit().putString("last_check_" + productId, today).apply();
 
@@ -329,14 +322,13 @@ public class NotificationService extends BroadcastReceiver {
                 consecutiveDays++;
                 Log.d(TAG, productName + ": ACR<ECR → counter now " + consecutiveDays);
             } else {
-                consecutiveDays = 0; // reset if caught up
+                consecutiveDays = 0;
                 Log.d(TAG, productName + ": ACR≥ECR → reset counter to 0");
             }
 
             prefs.edit().putInt("low_" + productId, consecutiveDays).apply();
         }
 
-        // ===== Decide if we should add to LOW list today =====
         boolean belowPaceNow = ACR < ECR;
 
         if (consecutiveDays == 2 && belowPaceNow) {
@@ -346,7 +338,6 @@ public class NotificationService extends BroadcastReceiver {
             Log.d(TAG, productName + ": Not added to LOW (streak=" + consecutiveDays + ", belowPaceNow=" + belowPaceNow + ")");
         }
 
-        // Auto reset after 3 days to avoid infinite streak
         if (consecutiveDays >= 3) {
             prefs.edit().putInt("low_" + productId, 0).apply();
             Log.d(TAG, productName + ": Counter auto-reset at 3 days");
@@ -393,18 +384,16 @@ public class NotificationService extends BroadcastReceiver {
                 }
             }
 
-            // If nothing in stock or ALL batches expired → do NOT include in forgotten
             if (totalQty <= 0) return;
             if (!hasUnexpiredBatch) {
                 Log.d(TAG, productName + ": All batches expired → skip forgotten");
                 return;
             }
         } else {
-            // No batches info → nothing to do
             return;
         }
 
-        Date lastUsedTime = document.getDate("lastUsed"); // Firestore Timestamp/Date
+        Date lastUsedTime = document.getDate("lastUsed");
         if (lastUsedTime == null) return;
 
         long todayMidnight    = atLocalMidnight(System.currentTimeMillis());
@@ -460,7 +449,6 @@ public class NotificationService extends BroadcastReceiver {
 
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
 
-        // ⬇️ Clear stale lists if date rolled over
         SharedPreferences itemsPrefs = context.getSharedPreferences("attention_items", Context.MODE_PRIVATE);
         String lastDay = itemsPrefs.getString("attention_items_date", "");
         if (!today.equals(lastDay)) {
@@ -471,7 +459,6 @@ public class NotificationService extends BroadcastReceiver {
                     .apply();
         }
 
-        // Always update stored lists for Notification Center
         itemsPrefs.edit()
                 .putString("expired",   TextUtils.join(",", expiredItems))
                 .putString("low",       TextUtils.join(",", lowConsumptionItems))
@@ -479,18 +466,11 @@ public class NotificationService extends BroadcastReceiver {
                 .putString("attention_items_date", today)
                 .apply();
 
-        // ✅ uiOnly path → refresh lists but NEVER show a push
         if (uiOnly) {
-            if (!hasExpired && !hasLow && !hasForgotten) {
-                NotificationManagerCompat.from(context).cancel(SUMMARY_NOTIFICATION_ID);
-            } else {
-                // cancel any old push so only Notification Center shows the list
-                NotificationManagerCompat.from(context).cancel(SUMMARY_NOTIFICATION_ID);
-            }
+            NotificationManagerCompat.from(context).cancel(SUMMARY_NOTIFICATION_ID);
             return;
         }
 
-        // If nothing left to notify, stop
         if (!hasExpired && !hasLow && !hasForgotten) return;
 
         SharedPreferences seenPrefs = context.getSharedPreferences(PREF_SEEN, Context.MODE_PRIVATE);
@@ -575,13 +555,20 @@ public class NotificationService extends BroadcastReceiver {
             }
         }
 
-        if (!fromSnooze) {
-            if (hasExpired)   scheduleSnoozeForType(context, "expired", false);
-            if (hasLow)       scheduleSnoozeForType(context, "low_consumption", false);
-            if (hasForgotten) scheduleSnoozeForType(context, "forgotten", false);
+        // ✅ Only schedule follow-ups if we actually showed something AND still below daily cap
+        if (shown && !fromSnooze) {
+            int userCap = userPrefs.getInt("maxNotificationsPerDay", 3);
+            int currentCount = countPrefs.getInt(today, 0);
+            if (currentCount < userCap) {
+                if (hasExpired)   scheduleSnoozeForType(context, "expired", false);
+                if (hasLow)       scheduleSnoozeForType(context, "low_consumption", false);
+                if (hasForgotten) scheduleSnoozeForType(context, "forgotten", false);
+            } else {
+                Log.d(TAG, "Cap reached after this send → not scheduling follow-ups");
+                cancelResendAndSnooze(context);
+            }
         }
     }
-
 
     @SuppressLint("MissingPermission")
     private boolean createGroupedNotification(Context context,
@@ -591,7 +578,6 @@ public class NotificationService extends BroadcastReceiver {
                                               boolean fromSnooze,
                                               boolean watchdogAuto) {
 
-        // Short, collapsed line
         StringBuilder contentBuilder = new StringBuilder();
         if (hasExpired)   contentBuilder.append("Items Expired");
         if (hasLow)       { if (contentBuilder.length() > 0) contentBuilder.append(", "); contentBuilder.append("Low Consumption Items"); }
@@ -608,7 +594,6 @@ public class NotificationService extends BroadcastReceiver {
             content = prefix + ": " + content;
         }
 
-        // Build BigText
         StringBuilder big = new StringBuilder();
         StringBuilder typesCSV = new StringBuilder();
         int sections = 0;
@@ -651,7 +636,6 @@ public class NotificationService extends BroadcastReceiver {
             builder.setGroup(NOTIFICATION_GROUP).setGroupSummary(true);
         }
 
-        // Tap → open Notification Center
         Intent openIntent = new Intent(context, MainActivity.class)
                 .putExtra("open_notifications", true)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
@@ -668,7 +652,6 @@ public class NotificationService extends BroadcastReceiver {
 
         String allTypes = typesCSV.toString();
 
-        // Action: Seen
         Intent markIntent = new Intent(context, NotificationService.class)
                 .setAction(ACTION_MARK_SEEN)
                 .putExtra("notificationType", allTypes);
@@ -677,7 +660,6 @@ public class NotificationService extends BroadcastReceiver {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         builder.addAction(R.drawable.ic_check, "Seen", markPendingIntent);
 
-        // Action: Snooze
         Intent snoozeIntent = new Intent(context, SnoozeOptionsActivity.class)
                 .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra("notificationType", allTypes)
@@ -714,7 +696,6 @@ public class NotificationService extends BroadcastReceiver {
 
                 prefs.edit().putInt(type, retry + 1).apply();
 
-                // keep these ONLY for real snooze
                 snoozePrefs.edit()
                         .putLong("snooze_next_at", when)
                         .apply();
@@ -729,12 +710,22 @@ public class NotificationService extends BroadcastReceiver {
                 Log.i(TAG, "Snooze retries exhausted for type=" + type);
             }
         } else {
+            // ✅ Safety net: don't schedule auto if cap is reached
+            SharedPreferences countPrefs = context.getSharedPreferences(PREF_NOTIFICATION_COUNT, Context.MODE_PRIVATE);
+            SharedPreferences userPrefs  = context.getSharedPreferences("UserPrefs", Context.MODE_PRIVATE);
+            String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+            int todayCount = countPrefs.getInt(today, 0);
+            int userLimit  = userPrefs.getInt("maxNotificationsPerDay", 3);
+            if (todayCount >= userLimit) {
+                Log.i(TAG, "Cap reached → not scheduling auto-resend for type=" + type);
+                return;
+            }
+
             long when = System.currentTimeMillis() + AUTO_RESEND_INTERVAL;
             scheduleAlarm(context, type, when, false);
             Log.i(TAG, "Auto-resend scheduled for type=" + type + " at " + new Date(when));
         }
     }
-
 
     public static void scheduleAlarm(Context ctx, String type, long at, boolean fromSnooze) {
         Intent i = new Intent(ctx, NotificationService.class)
@@ -750,7 +741,6 @@ public class NotificationService extends BroadcastReceiver {
         if (am == null) return;
 
         if (fromSnooze) {
-            // Exact, doze-proof, user-visible alarm → your BroadcastReceiver will fire on time
             Intent show = new Intent(ctx, MainActivity.class)
                     .setAction("SHOW_SNOOZE_ALARM")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -762,7 +752,6 @@ public class NotificationService extends BroadcastReceiver {
             return;
         }
 
-        // Auto-resend path (no alarm icon)
         boolean canExact = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             canExact = am.canScheduleExactAlarms();
@@ -974,15 +963,17 @@ public class NotificationService extends BroadcastReceiver {
         boolean nothingFiredSince = lastNotifyTime < nextAt || !today.equals(lastNotifyDate);
         boolean atLastSnooze = lastRetryCnt >= MAX_SNOOZE_RETRIES;
 
-        boolean bothHardStop = atLastSnooze && hitDailyCap;
-        boolean shouldForce = !seenToday && overdue && nothingFiredSince && !bothHardStop;
+        boolean shouldForce =
+                !seenToday &&
+                        overdue &&
+                        nothingFiredSince &&
+                        !hitDailyCap;  // ✅ watchdog will not force when capped
 
         Log.d(TAG, "Watchdog check → seenToday=" + seenToday
                 + ", overdue=" + overdue
                 + ", nothingFiredSince=" + nothingFiredSince
                 + ", atLastSnooze=" + atLastSnooze
                 + ", hitDailyCap=" + hitDailyCap
-                + ", bothHardStop=" + bothHardStop
                 + ", isSnoozed=" + isSnoozed
                 + ", nextAt=" + new Date(nextAt));
 
@@ -999,7 +990,6 @@ public class NotificationService extends BroadcastReceiver {
             );
             return;
         }
-
         pending.finish();
     }
 }
